@@ -287,9 +287,8 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 
 ## 📬 Contact
 
-- **Twitter**: [@YourHandle](https://twitter.com/YourHandle)
-- **Email**: your.email@example.com
-- **Discord**: [Join our community](https://discord.gg/yourserver)
+- **Email**: vishals2602@gmail.com
+- **LinkedIn**: https://www.linkedin.com/in/vishals2602/
 
 ---
 
