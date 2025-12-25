@@ -1,0 +1,205 @@
+{
+  "name": "AI Dev Shop - Project Orchestrator",
+  "description": "Manages project lifecycle, phase transitions, and agent triggering.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orchestrator",
+        "options": { "responseData": "allEntries" }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1008, 96],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine Phase - Calculate next phase and agents to trigger\n\nconst input = $input.all()[0].json;\nconst body = input.body || input;\n\nconst projectId = body.projectId || 'unknown';\nconst currentPhase = body.currentPhase || 'intake';\nconst threadTs = String(body.threadTs || '').replace(/^'/, '').trim();\nconst channelId = body.channelId || '';\nconst clientBrief = body.clientBrief || '';\nconst reviewFailed = body.reviewFailed === true;\nconst reviewPassed = body.reviewPassed === true;\nlet retryCount = parseInt(body.retryCount) || 0;\n\nconst phases = [\n  { id: 'intake', name: 'Intake', agents: ['acct_mgr'], nextPhase: 'planning', num: 1, emoji: '📥', order: 1 },\n  { id: 'planning', name: 'Planning', agents: ['pm', 'tech_lead'], nextPhase: 'design', num: 2, emoji: '📋', order: 2 },\n  { id: 'design', name: 'Design', agents: ['designer'], nextPhase: 'development', num: 3, emoji: '🎨', order: 3 },\n  { id: 'development', name: 'Development', agents: ['frontend', 'backend'], nextPhase: 'review', num: 4, emoji: '💻', order: 4 },\n  { id: 'review', name: 'Review', agents: ['reviewer'], nextPhase: 'testing', num: 5, emoji: '🔍', order: 5 },\n  { id: 'testing', name: 'Testing', agents: ['qa'], nextPhase: 'deployment', num: 6, emoji: '🧪', order: 6 },\n  { id: 'deployment', name: 'Deployment', agents: ['devops'], nextPhase: 'delivery', num: 7, emoji: '🚀', order: 7 },\n  { id: 'delivery', name: 'Delivery', agents: ['acct_mgr'], nextPhase: 'complete', num: 8, emoji: '🎁', order: 8 },\n  { id: 'complete', name: 'Complete', agents: [], nextPhase: null, num: 8, emoji: '✅', order: 9 }\n];\n\nlet currentIndex = phases.findIndex(p => p.id === currentPhase);\nlet currentInfo = phases[currentIndex] || phases[0];\nlet nextInfo = phases[currentIndex + 1] || { id: 'complete', name: 'Complete', agents: [], num: 8, emoji: '✅', order: 999 };\n\n// Quality gate - loop back on review fail\nlet qualityGateTriggered = false;\nif (currentPhase === 'review' && reviewFailed && retryCount < 2) {\n  nextInfo = phases.find(p => p.id === 'development');\n  retryCount++;\n  qualityGateTriggered = true;\n}\n\nconst progressMessages = {\n  'planning': '📋 The team is planning your app architecture...',\n  'design': '🎨 Our designer is creating the look and feel...',\n  'development': '💻 The developers are building your app...',\n  'review': '🔍 Code is being reviewed for quality...',\n  'testing': '🧪 Creating test plans...',\n  'deployment': '🚀 Deploying your app to the web...',\n  'delivery': '🎁 Almost there! Preparing your delivery...'\n};\n\nreturn [{\n  json: {\n    projectId,\n    currentPhase: currentInfo.id,\n    currentPhaseName: currentInfo.name,\n    currentPhaseNum: currentInfo.num,\n    currentPhaseOrder: currentInfo.order,\n    nextPhase: nextInfo.id,\n    nextPhaseName: nextInfo.name,\n    nextPhaseNum: nextInfo.num,\n    nextPhaseEmoji: nextInfo.emoji,\n    nextPhaseOrder: nextInfo.order,\n    totalPhases: 8,\n    agentsToTrigger: nextInfo.agents,\n    progressMessage: progressMessages[nextInfo.id] || '',\n    isComplete: nextInfo.id === 'complete',\n    threadTs,\n    channelId,\n    clientBrief,\n    retryCount,\n    qualityGateTriggered,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "determine-phase",
+      "name": "Determine Phase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-784, 96]
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "value": "YOUR_GOOGLE_SHEETS_ID", "mode": "list" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Projects" },
+        "filtersUI": { "values": [{ "lookupColumn": "project_id", "lookupValue": "={{ $json.projectId }}" }] },
+        "options": {}
+      },
+      "id": "lookup-project",
+      "name": "Lookup Project Details",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-672, 96],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "YOUR_CREDENTIAL_ID", "name": "Google Sheets account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Idempotency Check - Prevent duplicate phase transitions\n\nconst phaseData = $('Determine Phase').item.json;\nconst lookupResults = $('Lookup Project Details').all();\nconst projectData = (lookupResults.length > 0 && lookupResults[0].json) ? lookupResults[0].json : {};\n\nconst actualPhase = projectData.current_phase || 'intake';\nconst projectStatus = projectData.status || 'active';\n\nconst phaseOrder = {\n  'intake': 1, 'planning': 2, 'design': 3, 'development': 4,\n  'review': 5, 'testing': 6, 'deployment': 7, 'delivery': 8, 'complete': 9\n};\n\nconst actualOrder = phaseOrder[actualPhase] || 0;\nconst nextOrder = phaseOrder[phaseData.nextPhase] || 999;\n\n// Skip if stopped, complete, or already past this phase\nif (projectStatus === 'stopped' || projectStatus === 'complete' || actualOrder >= nextOrder) {\n  return [];\n}\n\nreturn lookupResults;"
+      },
+      "id": "check-idempotency",
+      "name": "Check Idempotency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-560, 96]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "mode": "list", "value": "YOUR_GOOGLE_SHEETS_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Projects" },
+        "columns": {
+          "value": {
+            "project_id": "={{ $('Determine Phase').item.json.projectId }}",
+            "updated_at": "={{ $('Determine Phase').item.json.timestamp }}",
+            "current_phase": "={{ $('Determine Phase').item.json.nextPhase }}"
+          },
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["project_id"]
+        },
+        "options": { "cellFormat": "USER_ENTERED" }
+      },
+      "id": "update-phase",
+      "name": "Update Project Phase",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-448, 96],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "YOUR_CREDENTIAL_ID", "name": "Google Sheets account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "typeValidation": "loose" },
+          "conditions": [{
+            "id": "not-complete",
+            "leftValue": "={{ $('Determine Phase').item.json.isComplete }}",
+            "rightValue": false,
+            "operator": { "type": "boolean", "operation": "equals" }
+          }],
+          "combinator": "and"
+        }
+      },
+      "id": "check-complete",
+      "name": "Check Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-224, 96],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "YOUR_INTERNAL_CHANNEL_ID" },
+        "text": "={{ $('Determine Phase').item.json.nextPhaseEmoji }} *Phase {{ $('Determine Phase').item.json.currentPhaseNum }}/{{ $('Determine Phase').item.json.totalPhases }}*: {{ $('Determine Phase').item.json.currentPhaseName }} → {{ $('Determine Phase').item.json.nextPhaseName }}\\n\\n*Project:* `{{ $('Determine Phase').item.json.projectId }}`\\n*Agents:* {{ $('Determine Phase').item.json.agentsToTrigger.join(', ') }}"
+      },
+      "id": "notify-transition",
+      "name": "Notify Phase Transition",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [0, 0],
+      "credentials": {
+        "slackApi": { "id": "YOUR_CREDENTIAL_ID", "name": "Slack account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare Agent Triggers\n\nconst phaseData = $('Determine Phase').item.json;\nconst lookupResults = $('Lookup Project Details').all();\nconst projectData = (lookupResults.length > 0 && lookupResults[0].json) ? lookupResults[0].json : {};\n\nconst projectStatus = projectData.status || '';\nif (projectStatus === 'stopped' || projectStatus === 'complete') return [];\n\nconst agents = phaseData.agentsToTrigger || [];\nif (!agents.length) return [];\n\nconst clientBrief = projectData.client_brief || phaseData.clientBrief || '';\nconst threadTs = String(projectData.thread_ts || phaseData.threadTs || '').replace(/^'/, '').trim();\nconst isDeliveryPhase = phaseData.nextPhase === 'delivery';\n\nreturn agents.map(agentId => ({\n  json: {\n    agentId,\n    projectId: phaseData.projectId,\n    task: 'Complete phase task',\n    threadTs,\n    channelId: (isDeliveryPhase && agentId === 'acct_mgr') ? 'YOUR_CLIENT_CHANNEL_ID' : 'YOUR_INTERNAL_CHANNEL_ID',\n    isResume: false,\n    phase: phaseData.nextPhase,\n    clientBrief,\n    isDelivery: isDeliveryPhase && agentId === 'acct_mgr'\n  }\n}));"
+      },
+      "id": "prepare-triggers",
+      "name": "Prepare Agent Triggers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/agent-executor",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ agentId: $json.agentId, projectId: $json.projectId, task: $json.task, threadTs: $json.threadTs, channelId: $json.channelId, isResume: false, phase: $json.phase, clientBrief: $json.clientBrief, isDelivery: $json.isDelivery }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "trigger-agents",
+      "name": "Trigger Phase Agents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [448, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "mode": "list", "value": "YOUR_GOOGLE_SHEETS_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Projects" },
+        "columns": {
+          "value": {
+            "project_id": "={{ $('Determine Phase').item.json.projectId }}",
+            "status": "complete",
+            "current_phase": "complete",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["project_id"]
+        },
+        "options": { "cellFormat": "USER_ENTERED" }
+      },
+      "id": "mark-complete",
+      "name": "Mark Project Complete",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [112, 192],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "YOUR_CREDENTIAL_ID", "name": "Google Sheets account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "YOUR_INTERNAL_CHANNEL_ID" },
+        "text": "=🎉 *PROJECT COMPLETE!* 🎉\\n\\nProject `{{ $('Determine Phase').item.json.projectId }}` has been successfully delivered!\\n\\n⭐ Great work team! 👏"
+      },
+      "id": "notify-complete",
+      "name": "Notify Completion",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [0, 192],
+      "credentials": {
+        "slackApi": { "id": "YOUR_CREDENTIAL_ID", "name": "Slack account" }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Determine Phase", "type": "main", "index": 0 }]] },
+    "Determine Phase": { "main": [[{ "node": "Lookup Project Details", "type": "main", "index": 0 }]] },
+    "Lookup Project Details": { "main": [[{ "node": "Check Idempotency", "type": "main", "index": 0 }]] },
+    "Check Idempotency": { "main": [[{ "node": "Update Project Phase", "type": "main", "index": 0 }]] },
+    "Update Project Phase": { "main": [[{ "node": "Check Complete", "type": "main", "index": 0 }]] },
+    "Check Complete": {
+      "main": [
+        [{ "node": "Notify Phase Transition", "type": "main", "index": 0 }],
+        [{ "node": "Mark Project Complete", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify Phase Transition": { "main": [[{ "node": "Prepare Agent Triggers", "type": "main", "index": 0 }]] },
+    "Prepare Agent Triggers": { "main": [[{ "node": "Trigger Phase Agents", "type": "main", "index": 0 }]] },
+    "Mark Project Complete": { "main": [[{ "node": "Notify Completion", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

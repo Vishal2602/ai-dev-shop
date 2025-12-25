@@ -1,0 +1,231 @@
+{
+  "name": "AI Dev Shop - Client Intake",
+  "description": "Entry point for client messages in Slack. Handles new projects, thread replies, revisions, and stop commands.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": ["message"],
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_CLIENT_CHANNEL_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "slack-trigger",
+      "name": "Slack Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [-1936, 464],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check-not-bot-1",
+              "operator": { "type": "string", "operation": "empty" },
+              "leftValue": "={{ $json.bot_id || '' }}"
+            },
+            {
+              "id": "check-not-bot-2",
+              "operator": { "type": "string", "operation": "notEquals" },
+              "leftValue": "={{ $json.subtype || '' }}",
+              "rightValue": "bot_message"
+            }
+          ]
+        }
+      },
+      "id": "filter-bot",
+      "name": "Filter Bot Messages",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-1712, 464],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Message - Extract timestamp and message from Slack\n// Comprehensive bot message detection for ALL event types\n\nconst rawInput = $input.all()[0].json;\n\n// Check for message_changed events\nconst isMessageChanged = rawInput.subtype === 'message_changed';\nconst nestedMessage = rawInput.message || {};\n\n// Check bot indicators at ALL levels\nconst hasBotId = !!rawInput.bot_id || !!nestedMessage.bot_id;\nconst hasAppId = !!rawInput.app_id || !!nestedMessage.app_id;\nconst isBotSubtype = rawInput.subtype === 'bot_message';\nconst hasBotProfile = !!rawInput.bot_profile || !!nestedMessage.bot_profile;\n\n// Get the actual message text\nconst textToCheck = rawInput.text || rawInput.message?.text || rawInput.event?.text || '';\n\n// Check for bot signatures\nconst hasN8nSignature = textToCheck.includes('Automated with this') ||\n                       textToCheck.includes('n8n workflow');\n\nconst isBotMessage = hasBotId || hasAppId || isBotSubtype || hasBotProfile || hasN8nSignature;\n\nif (isBotMessage || isMessageChanged) {\n  return [];\n}\n\nconst messageTs = rawInput.ts || rawInput.event_ts || '';\nconst threadTs = rawInput.thread_ts || rawInput.event?.thread_ts || '';\nlet clientMessage = (rawInput.text || rawInput.event?.text || '').trim();\n\nconst isValidMessage = clientMessage.length > 0 && clientMessage.length < 10000;\nif (!isValidMessage) return [];\n\nconst userId = rawInput.user || rawInput.event?.user || 'unknown';\nconst channelId = rawInput.channel || rawInput.event?.channel || '';\nconst isThreadReply = !!threadTs && threadTs !== messageTs;\nconst threadRoot = threadTs || messageTs;\n\nreturn [{\n  json: {\n    clientMessage,\n    userId,\n    channelId,\n    messageTs: String(messageTs),\n    threadTs: String(threadTs),\n    threadRoot: String(threadRoot),\n    isThreadReply,\n    isValidMessage\n  }\n}];"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1488, 464]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is-thread-reply",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ $json.isThreadReply }}"
+            }
+          ]
+        }
+      },
+      "id": "check-thread",
+      "name": "Check Thread Reply",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-1264, 464],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEETS_ID",
+          "mode": "list"
+        },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Projects" },
+        "options": {}
+      },
+      "id": "lookup-project",
+      "name": "Lookup Project",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-1040, 320],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate New Project\nconst parseMessageData = $('Parse Message').item.json;\n\nconst timestamp = Date.now();\nconst randomStr = Math.random().toString(36).substring(2, 8);\nconst projectId = `proj_${randomStr}_${timestamp}`;\nconst threadTs = String(parseMessageData.messageTs || '');\n\nreturn [{\n  json: {\n    projectId,\n    threadTs,\n    channelId: parseMessageData.channelId,\n    userId: parseMessageData.userId,\n    clientMessage: parseMessageData.clientMessage,\n    clientBrief: parseMessageData.clientMessage,\n    project_id: projectId,\n    thread_ts: \"'\" + threadTs,\n    channel_id: parseMessageData.channelId,\n    user_id: parseMessageData.userId,\n    client_brief: parseMessageData.clientMessage,\n    current_phase: 'intake',\n    status: 'active',\n    created_at: new Date().toISOString(),\n    updated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "generate-project",
+      "name": "Generate New Project",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1040, 624]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "mode": "list", "value": "YOUR_GOOGLE_SHEETS_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Projects" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.project_id }}",
+            "thread_ts": "={{ $json.thread_ts }}",
+            "channel_id": "={{ $json.channel_id }}",
+            "user_id": "={{ $json.user_id }}",
+            "client_brief": "={{ $json.client_brief }}",
+            "current_phase": "={{ $json.current_phase }}",
+            "status": "={{ $json.status }}",
+            "created_at": "={{ $json.created_at }}",
+            "updated_at": "={{ $json.updated_at }}"
+          }
+        },
+        "options": { "cellFormat": "USER_ENTERED" }
+      },
+      "id": "save-project",
+      "name": "Save Project",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-816, 624],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /home/aidevshop/ai-dev-shop-projects/{{ $('Generate New Project').item.json.projectId }}/{uploads,src,docs}"
+      },
+      "id": "create-folder",
+      "name": "Create Project Folder",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [-592, 560],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "sshPassword": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "SSH Password account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/agent-executor",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ agentId: 'acct_mgr', projectId: $('Generate New Project').item.json.projectId, task: 'Greet new client', clientMessage: $('Generate New Project').item.json.clientMessage, threadTs: String($('Generate New Project').item.json.threadTs || ''), channelId: $('Generate New Project').item.json.channelId, isResume: false, phase: 'intake', clientBrief: $('Generate New Project').item.json.clientBrief }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "trigger-acct-mgr",
+      "name": "Trigger Account Manager",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-368, 512],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "YOUR_INTERNAL_CHANNEL_ID" },
+        "text": "=📥 *New Project Incoming*\n\n*Project ID:* `{{ $('Generate New Project').item.json.projectId }}`\n*Client:* <@{{ $('Generate New Project').item.json.userId }}>\n*Message:* {{ $('Generate New Project').item.json.clientMessage }}\n\n@Maya (Account Manager) is handling initial contact."
+      },
+      "id": "notify-internal",
+      "name": "Notify Internal",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [-368, 672],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Slack Trigger": { "main": [[{ "node": "Filter Bot Messages", "type": "main", "index": 0 }]] },
+    "Filter Bot Messages": { "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]] },
+    "Parse Message": { "main": [[{ "node": "Check Thread Reply", "type": "main", "index": 0 }]] },
+    "Check Thread Reply": {
+      "main": [
+        [{ "node": "Lookup Project", "type": "main", "index": 0 }],
+        [{ "node": "Generate New Project", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate New Project": { "main": [[{ "node": "Save Project", "type": "main", "index": 0 }]] },
+    "Save Project": {
+      "main": [[
+        { "node": "Create Project Folder", "type": "main", "index": 0 },
+        { "node": "Trigger Account Manager", "type": "main", "index": 0 }
+      ]]
+    },
+    "Create Project Folder": { "main": [[{ "node": "Notify Internal", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

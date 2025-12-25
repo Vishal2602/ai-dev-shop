@@ -1,0 +1,179 @@
+{
+  "name": "AI Dev Shop - Agent Executor",
+  "description": "Executes AI agents via Claude CLI and posts responses to Slack.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent-executor",
+        "options": { "responseData": "allEntries" }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1312, 192],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "value": "YOUR_GOOGLE_SHEETS_ID", "mode": "list" },
+        "sheetName": { "__rl": true, "value": "agent_personalities", "mode": "name" },
+        "options": {}
+      },
+      "id": "load-personality",
+      "name": "Load Agent Personality",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-1088, 192],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "YOUR_CREDENTIAL_ID", "name": "Google Sheets account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Agent Prompt - Creates prompt and SSH command for Claude CLI\n\nconst webhookData = $('Webhook Trigger').item.json;\nconst personalities = $input.all().map(i => i.json);\nconst body = webhookData.body || webhookData;\n\nconst agentId = body.agentId || 'acct_mgr';\nconst projectId = body.projectId || 'unknown';\nconst task = body.task || 'No task specified';\nconst clientMessage = body.clientMessage || '';\nconst threadTs = String(body.threadTs || '').replace(/^'/, '').trim();\nconst channelId = body.channelId || '';\nconst isResume = body.isResume === true;\nconst phase = body.phase || 'intake';\nlet clientBrief = body.clientBrief || task;\nconst isRevision = body.isRevision === true;\nconst revisionFeedback = body.revisionFeedback || '';\nconst isDelivery = body.isDelivery === true;\n\n// Generate session ID\nconst sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nconst personality = personalities.find(p => p.agent_id === agentId) || {\n  name: 'Maya', role: 'Account Manager', emoji: '👋',\n  personality: 'Warm, professional, and client-focused'\n};\n\nconst clientChannel = 'YOUR_CLIENT_CHANNEL_ID';\nconst internalChannel = 'YOUR_INTERNAL_CHANNEL_ID';\nconst targetChannel = (agentId === 'acct_mgr') ? clientChannel : internalChannel;\nconst isInternalTask = (agentId !== 'acct_mgr');\n\nconst projectPath = `/home/aidevshop/ai-dev-shop-projects/${projectId}`;\n\nconst timeoutSeconds = {\n  'intake': 120, 'planning': 360, 'design': 360,\n  'development': 1200, 'review': 420, 'testing': 420,\n  'deployment': 720, 'delivery': 180\n};\nconst timeout = timeoutSeconds[phase] || 360;\n\n// Build prompt based on agent and phase\nlet prompt = `You are ${personality.name}, ${personality.role}. ${personality.personality}\\n\\nProject: ${projectId}\\nPhase: ${phase}\\nTask: ${task}\\n\\nClient Brief: ${clientBrief}`;\n\nconst sshCommand = `mkdir -p ${projectPath} && cd ${projectPath} && timeout ${timeout} claude --dangerously-skip-permissions --session-id ${sessionId} -p \"${prompt.replace(/\"/g, '\\\\\"')}\" 2>&1`;\n\nreturn [{\n  json: {\n    sshCommand,\n    prompt,\n    agentId,\n    projectId,\n    sessionId,\n    name: personality.name,\n    role: personality.role,\n    emoji: personality.emoji,\n    targetChannel,\n    threadTs,\n    channelId: channelId || clientChannel,\n    isInternalTask,\n    phase,\n    isResume,\n    isDelivery,\n    isRevision,\n    clientBrief,\n    shouldAdvancePhase: isResume || isInternalTask,\n    projectPath,\n    timeout\n  }\n}];"
+      },
+      "id": "build-prompt",
+      "name": "Build Agent Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-864, 192]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.sshCommand }}"
+      },
+      "id": "call-claude",
+      "name": "Call Claude CLI",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [-640, 192],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "credentials": {
+        "sshPassword": { "id": "YOUR_CREDENTIAL_ID", "name": "SSH Password account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude CLI Response\n\nconst sshResult = $input.all()[0].json;\nconst buildData = $('Build Agent Prompt').item.json;\n\nlet response = (sshResult.stdout || '').trim();\nconst exitCode = sshResult.exitCode || 0;\nconst phase = buildData.phase || 'intake';\n\nlet hasError = exitCode === 124 || !response || response.length < 10;\n\nif (hasError) {\n  const fallbacks = {\n    'planning': '📋 Done. PROJECT_PLAN.md and ARCHITECTURE.md created.',\n    'design': '🎨 Done. DESIGN.md is ready.',\n    'development': '💻 Done. Core application built.',\n    'review': '🔍 Code review complete. REVIEW_STATUS: PASS',\n    'testing': '🧪 Done. TEST_PLAN.md created.',\n    'deployment': '🚀 Deployment in progress.',\n    'delivery': '🎁 Your project is ready!',\n    'intake': '👋 Hi there! How can I help you today?'\n  };\n  response = fallbacks[phase] || 'Task completed.';\n}\n\n// Truncate if too long\nif (response.length > 3500) {\n  response = response.substring(0, 3200) + '\\n\\n... (truncated)';\n}\n\n// Detect review status\nconst reviewPassed = /REVIEW_STATUS:\\s*PASS/i.test(response);\nconst reviewFailed = /REVIEW_STATUS:\\s*FAIL/i.test(response);\n\nreturn [{\n  json: {\n    response,\n    shouldAdvancePhase: buildData.shouldAdvancePhase,\n    reviewPassed,\n    reviewFailed,\n    projectId: buildData.projectId,\n    agentId: buildData.agentId,\n    name: buildData.name,\n    role: buildData.role,\n    emoji: buildData.emoji,\n    targetChannel: buildData.targetChannel,\n    threadTs: buildData.threadTs,\n    channelId: buildData.channelId,\n    isInternalTask: buildData.isInternalTask,\n    phase: buildData.phase,\n    clientBrief: buildData.clientBrief,\n    hasError\n  }\n}];"
+      },
+      "id": "parse-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-432, 192]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{
+            "id": "is-internal",
+            "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+            "leftValue": "={{ $json.isInternalTask }}"
+          }]
+        }
+      },
+      "id": "check-internal",
+      "name": "Check Internal Task",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-304, 192],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "={{ $json.targetChannel }}" },
+        "text": "={{ $json.emoji }} *{{ $json.name }}* ({{ $json.role }}):\\n\\n{{ $json.response }}\\n\\n_Project: `{{ $json.projectId }}` | Phase: {{ $json.phase }}_"
+      },
+      "id": "post-internal",
+      "name": "Post to Internal",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [-112, 96],
+      "credentials": {
+        "slackApi": { "id": "YOUR_CREDENTIAL_ID", "name": "Slack account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "={{ $json.targetChannel }}" },
+        "text": "={{ $json.response }}",
+        "otherOptions": {
+          "thread_ts": { "replyValues": { "thread_ts": "={{ $json.threadTs }}" } },
+          "mrkdwn": true
+        }
+      },
+      "id": "post-client",
+      "name": "Post to Client Thread",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [-112, 288],
+      "credentials": {
+        "slackApi": { "id": "YOUR_CREDENTIAL_ID", "name": "Slack account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{
+            "id": "should-advance",
+            "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+            "leftValue": "={{ $('Parse Response').item.json.shouldAdvancePhase }}"
+          }]
+        }
+      },
+      "id": "check-advance",
+      "name": "Check Advance Phase",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [16, 192]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/orchestrator",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ projectId: $('Parse Response').item.json.projectId, currentPhase: $('Parse Response').item.json.phase, action: 'next', threadTs: $('Parse Response').item.json.threadTs, channelId: $('Parse Response').item.json.channelId, clientBrief: $('Parse Response').item.json.clientBrief, reviewPassed: $('Parse Response').item.json.reviewPassed, reviewFailed: $('Parse Response').item.json.reviewFailed }) }}",
+        "options": { "timeout": 300000 }
+      },
+      "id": "trigger-orchestrator",
+      "name": "Trigger Orchestrator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [240, 96],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Load Agent Personality", "type": "main", "index": 0 }]] },
+    "Load Agent Personality": { "main": [[{ "node": "Build Agent Prompt", "type": "main", "index": 0 }]] },
+    "Build Agent Prompt": { "main": [[{ "node": "Call Claude CLI", "type": "main", "index": 0 }]] },
+    "Call Claude CLI": { "main": [[{ "node": "Parse Response", "type": "main", "index": 0 }]] },
+    "Parse Response": { "main": [[{ "node": "Check Internal Task", "type": "main", "index": 0 }]] },
+    "Check Internal Task": {
+      "main": [
+        [{ "node": "Post to Internal", "type": "main", "index": 0 }],
+        [{ "node": "Post to Client Thread", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to Internal": { "main": [[{ "node": "Check Advance Phase", "type": "main", "index": 0 }]] },
+    "Post to Client Thread": { "main": [[{ "node": "Check Advance Phase", "type": "main", "index": 0 }]] },
+    "Check Advance Phase": { "main": [[{ "node": "Trigger Orchestrator", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

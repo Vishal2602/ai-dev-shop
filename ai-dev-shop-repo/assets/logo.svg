@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#gradient)" />
+  
+  <!-- Factory building -->
+  <rect x="40" y="80" width="120" height="80" rx="5" fill="white" opacity="0.95"/>
+  
+  <!-- Chimney -->
+  <rect x="130" y="50" width="20" height="40" rx="3" fill="white" opacity="0.95"/>
+  
+  <!-- Smoke clouds -->
+  <circle cx="140" cy="45" r="8" fill="white" opacity="0.7"/>
+  <circle cx="145" cy="35" r="6" fill="white" opacity="0.5"/>
+  <circle cx="138" cy="28" r="5" fill="white" opacity="0.3"/>
+  
+  <!-- Windows (representing screens/code) -->
+  <rect x="50" y="95" width="25" height="20" rx="2" fill="#667eea"/>
+  <rect x="85" y="95" width="25" height="20" rx="2" fill="#764ba2"/>
+  <rect x="120" y="95" width="25" height="20" rx="2" fill="#667eea"/>
+  
+  <!-- Door -->
+  <rect x="82" y="125" width="36" height="35" rx="3" fill="#4a5568"/>
+  
+  <!-- AI brain icon in door -->
+  <circle cx="100" cy="140" r="10" fill="none" stroke="white" stroke-width="2"/>
+  <path d="M95 140 Q100 132 105 140 Q100 148 95 140" fill="none" stroke="white" stroke-width="1.5"/>
+  
+  <!-- Gear icons -->
+  <circle cx="60" cy="140" r="8" fill="none" stroke="#667eea" stroke-width="2"/>
+  <circle cx="140" cy="140" r="8" fill="none" stroke="#764ba2" stroke-width="2"/>
+</svg>
